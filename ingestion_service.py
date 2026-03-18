@@ -285,10 +285,10 @@ def filter_nse_reg30(filings):
         if is_nse_reg30(f):
             reg30.append({
                 "exchange": "NSE",
-                "company":  f.get("comp", "Unknown"),
+                "company":  f.get("sm_name", ""),
                 "subject":  f.get("subject", "") or f.get("desc", ""),
                 "symbol":   f.get("symbol", ""),
-                "attchmnt": f.get("attchmnt", ""),
+                "attchmnt": f.get("attchmntFile", ""),
                 "an_no":    f.get("an_no", ""),
             })
     log.info(f"   NSE Reg 30 filings: {len(reg30)}")
@@ -304,7 +304,7 @@ def download_nse_pdf(session, filing):
         log.warning(f"   No attachment for NSE: {company}")
         return None
 
-    url = f"https://www.nseindia.com{attchmnt}" if attchmnt.startswith("/") else attchmnt
+    url = attchmnt if attchmnt.startswith("http") else f"https://www.nseindia.com{attchmnt}"
     try:
         resp = session.get(url, headers=NSE_HEADERS, timeout=30)
         resp.raise_for_status()
