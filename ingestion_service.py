@@ -90,15 +90,22 @@ BSE_REG30_CAT = "7"
 # ── Helpers ───────────────────────────────────────────────────
 
 def is_nse_reg30(filing):
-    """NSE Reg 30 filings are under 'Company Update' and related categories."""
-    category = (filing.get("smIndustry", "") or filing.get("desc", "") or "").lower()
-    subject  = (filing.get("subject", "") or "").lower()
-    # Match by category OR if subject explicitly mentions regulation 30
+    """
+    NSE Reg 30 filings — filter by 'desc' field which contains the category.
+    From actual API: {"desc": "Analysts/Institutional Investor Meet/Con. Call Updates", ...}
+    smIndustry is null — use desc for category matching.
+    Also check attchmntText for regulation 30 mentions.
+    """
+    desc         = (filing.get("desc", "") or "").lower()
+    attach_text  = (filing.get("attchmntText", "") or "").lower()
+
     return (
-        any(cat in category for cat in NSE_REG30_CATEGORIES)
-        or "reg 30" in subject
-        or "regulation 30" in subject
-        or "lodr" in subject
+        any(cat in desc for cat in NSE_REG30_CATEGORIES)
+        or "reg 30" in desc
+        or "regulation 30" in desc
+        or "reg 30" in attach_text
+        or "regulation 30" in attach_text
+        or "lodr" in attach_text
     )
 
 
@@ -285,11 +292,11 @@ def filter_nse_reg30(filings):
         if is_nse_reg30(f):
             reg30.append({
                 "exchange": "NSE",
-                "company":  f.get("sm_name", ""),
-                "subject":  f.get("subject", "") or f.get("desc", ""),
+                "company":  f.get("sm_name", "") or f.get("comp", "Unknown"),
+                "subject":  f.get("desc", "") or f.get("subject", ""),
                 "symbol":   f.get("symbol", ""),
-                "attchmnt": f.get("attchmntFile", ""),
-                "an_no":    f.get("an_no", ""),
+                "attchmnt": f.get("attchmntFile", "") or f.get("attchmnt", ""),
+                "an_no":    f.get("seq_id", "") or f.get("an_no", "") or f.get("sort_date", "").replace(" ", "_").replace(":", "-"),
             })
     log.info(f"   NSE Reg 30 filings: {len(reg30)}")
     return reg30
@@ -298,12 +305,13 @@ def filter_nse_reg30(filings):
 def download_nse_pdf(session, filing):
     company  = safe_filename(filing["company"])
     attchmnt = filing["attchmnt"]
-    an_no    = filing["an_no"]
+    an_no    = filing["an_no"] or "unknown"
 
     if not attchmnt:
         log.warning(f"   No attachment for NSE: {company}")
         return None
 
+    # attchmntFile is already a full URL (https://nsearchives.nseindia.com/...)
     url = attchmnt if attchmnt.startswith("http") else f"https://www.nseindia.com{attchmnt}"
     try:
         resp = session.get(url, headers=NSE_HEADERS, timeout=30)
@@ -333,8 +341,10 @@ def create_github_release(pdf_files):
     }
 
     # Step 1: Create the release
+    # Tag must be URL-safe — replace spaces and special chars
+    safe_tag = DATE_LABEL.replace(" ", "-").replace("—", "to")
     release_payload = {
-        "tag_name":   DATE_LABEL,
+        "tag_name":   safe_tag,
         "name":       f"SEBI Reg 30 Filings — {DATE_LABEL}",
         "body":       f"Automated Reg 30 filings from NSE + BSE for {DATE_LABEL}.",
         "draft":      False,
@@ -358,14 +368,22 @@ def create_github_release(pdf_files):
         return None
 
     # Step 2: Upload each PDF to the release
-    for pdf_path in pdf_files:
+    uploaded_names = set()
+    for idx, pdf_path in enumerate(pdf_files):
         if not pdf_path or not os.path.exists(pdf_path):
             continue
         filename = os.path.basename(pdf_path)
+        # Handle duplicate filenames by adding index
+        if filename in uploaded_names:
+            name, ext = os.path.splitext(filename)
+            filename = f"{name}_{idx}{ext}"
+        uploaded_names.add(filename)
+        # URL encode the filename
+        encoded_name = requests.utils.quote(filename)
         try:
             with open(pdf_path, "rb") as f:
                 upload_resp = requests.post(
-                    f"{upload_url}?name={filename}",
+                    f"{upload_url}?name={encoded_name}",
                     headers={
                         **headers,
                         "Content-Type": "application/octet-stream",
