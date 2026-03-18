@@ -463,7 +463,9 @@ def _send_smtp(msg):
         msg["Cc"] = ", ".join(cc_list)
 
     try:
-        with smtplib.SMTP("smtp.office365.com", 587) as server:
+        # with smtplib.SMTP("smtp.office365.com", 587) as server:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.sendmail(SENDER_EMAIL, all_rcpt, msg.as_string())
