@@ -66,6 +66,27 @@ os.makedirs(f"{PDF_DIR}/NSE", exist_ok=True)
 os.makedirs(f"{PDF_DIR}/BSE", exist_ok=True)
 
 
+# ── NSE/BSE Filter Constants ──────────────────────────────────
+
+# NSE announcement categories that correspond to Reg 30 filings
+NSE_REG30_CATEGORIES = [
+    "company update",
+    "board meeting",
+    "outcome of board meeting",
+    "press release",
+    "analyst meet",
+    "investor meet",
+    "change in directors",
+    "resignation of director",
+    "appointment of director",
+    "acquisition",
+    "trading window",
+]
+
+# BSE category 7 = Company Update (Reg 30 filings)
+BSE_REG30_CAT = "7"
+
+
 # ── Helpers ───────────────────────────────────────────────────
 
 def is_nse_reg30(filing):
