@@ -1,3 +1,14 @@
+"""
+SEBI Regulation 30 (LODR) Filing Scraper
+Fetches previous day's Reg 30 filings from NSE + BSE.
+Downloads all PDFs and:
+  - If total size <= 25MB → attaches PDFs directly to email
+  - If total size >  25MB → uploads to GitHub Release, emails the link
+
+Dependencies:
+    pip install requests
+"""
+
 import os
 import time
 import requests
@@ -352,6 +363,25 @@ def create_github_release(pdf_files):
     }
 
     try:
+        # Check if release with this tag already exists — delete it first
+        existing = requests.get(
+            f"https://api.github.com/repos/{GH_REPO}/releases/tags/{safe_tag}",
+            headers=headers, timeout=15
+        )
+        if existing.status_code == 200:
+            existing_id = existing.json()["id"]
+            requests.delete(
+                f"https://api.github.com/repos/{GH_REPO}/releases/{existing_id}",
+                headers=headers, timeout=15
+            )
+            # Also delete the tag
+            requests.delete(
+                f"https://api.github.com/repos/{GH_REPO}/git/refs/tags/{safe_tag}",
+                headers=headers, timeout=15
+            )
+            log.info(f"   🗑️  Deleted existing release for tag: {safe_tag}")
+
+        # Create fresh release
         resp = requests.post(
             f"https://api.github.com/repos/{GH_REPO}/releases",
             json=release_payload,
@@ -472,7 +502,7 @@ SEBI Reg 30 Auto-Scraper"""
 
 
 def _send_smtp(msg):
-    """Send email via Outlook SMTP."""
+    """Send email via Gmail SMTP SSL."""
     # Build recipient list — To + CC
     cc_list  = [e.strip() for e in CC_EMAILS.split(",") if e.strip()]
     all_rcpt = [RECEIVER_EMAIL] + cc_list
@@ -481,8 +511,6 @@ def _send_smtp(msg):
         msg["Cc"] = ", ".join(cc_list)
 
     try:
-        # with smtplib.SMTP("smtp.office365.com", 587) as server:
-            # server.starttls()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.sendmail(SENDER_EMAIL, all_rcpt, msg.as_string())
