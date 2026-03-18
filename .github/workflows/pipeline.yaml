@@ -8,6 +8,9 @@ on:
   # Allow manual trigger from GitHub UI (for testing)
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
 
   # ── Job 1: Scrape and Email ───────────────────────────────
