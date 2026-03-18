@@ -39,6 +39,10 @@ jobs:
           CC_EMAILS:       ${{ secrets.CC_EMAILS }}
         run: python ingestion_service.py
 
+      - name: Ensure pdfs directory exists
+        if: always()
+        run: mkdir -p pdfs
+
       - name: Upload PDFs as artifact (7-day backup)
         if: always()
         uses: actions/upload-artifact@v4
@@ -46,6 +50,7 @@ jobs:
           name: sebi-reg30-pdfs-${{ github.run_id }}
           path: pdfs/
           retention-days: 7
+          if-no-files-found: ignore
 
   # ── Job 2: Delete Releases older than 3 days ─────────────
   cleanup:
