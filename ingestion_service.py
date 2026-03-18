@@ -68,8 +68,17 @@ os.makedirs(f"{PDF_DIR}/BSE", exist_ok=True)
 
 # ── Helpers ───────────────────────────────────────────────────
 
-def is_reg30(subject):
-    return any(kw in subject.lower() for kw in REG30_KEYWORDS)
+def is_nse_reg30(filing):
+    """NSE Reg 30 filings are under 'Company Update' and related categories."""
+    category = (filing.get("smIndustry", "") or filing.get("desc", "") or "").lower()
+    subject  = (filing.get("subject", "") or "").lower()
+    # Match by category OR if subject explicitly mentions regulation 30
+    return (
+        any(cat in category for cat in NSE_REG30_CATEGORIES)
+        or "reg 30" in subject
+        or "regulation 30" in subject
+        or "lodr" in subject
+    )
 
 
 def get_total_size(pdf_files):
@@ -97,33 +106,55 @@ def fetch_bse_filings(date):
     date_str = date.strftime("%Y%m%d")
     label    = date.strftime("%Y-%m-%d")
     log.info(f"📡 Fetching BSE filings for {label}...")
-    url = (
-        "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w"
-        f"?strCat=-1&strPrevDate={date_str}&strScrip=&strSearch="
-        f"&strToDate={date_str}&strType=C&subcategory=-1"
-    )
-    try:
-        resp = requests.get(url, headers=BSE_HEADERS, timeout=30)
-        resp.raise_for_status()
-        filings = resp.json().get("Table", [])
-        log.info(f"   BSE total announcements: {len(filings)}")
-        return filings
-    except Exception as e:
-        log.error(f"   BSE fetch error: {e}")
-        return []
+
+    # Try category 7 (Company Update / Reg 30) first, fallback to all (-1)
+    all_filings = []
+    for cat in [BSE_REG30_CAT, "-1"]:
+        url = (
+            "https://api.bseindia.com/BseIndiaAPI/api/AnnSubCategoryGetData/w"
+            f"?strCat={cat}&strPrevDate={date_str}&strScrip=&strSearch="
+            f"&strToDate={date_str}&strType=C&subcategory=-1"
+        )
+        try:
+            resp = requests.get(url, headers=BSE_HEADERS, timeout=30)
+            resp.raise_for_status()
+            filings = resp.json().get("Table", [])
+            if filings:
+                log.info(f"   BSE total announcements (cat={cat}): {len(filings)}")
+                all_filings = filings
+                break
+        except Exception as e:
+            log.error(f"   BSE fetch error (cat={cat}): {e}")
+            continue
+
+    if not all_filings:
+        log.warning(f"   BSE returned 0 announcements for {label}")
+    return all_filings
 
 
 def filter_bse_reg30(filings):
+    """
+    BSE category 7 already filters to Company Update / Reg 30 filings.
+    When fetching all (-1), filter by subject keywords.
+    """
     reg30 = []
     for f in filings:
-        subject = f.get("NEWSSUB", "") or f.get("HEADLINE", "") or ""
-        if is_reg30(subject):
+        subject  = (f.get("NEWSSUB", "") or f.get("HEADLINE", "") or "").lower()
+        category = (f.get("CATEGORYNAME", "") or f.get("SUBCATNAME", "") or "").lower()
+        # Include if category matches OR subject mentions regulation 30
+        if (
+            "company update" in category
+            or "reg 30" in subject
+            or "regulation 30" in subject
+            or "lodr" in subject
+            or "material" in subject
+        ):
             reg30.append({
-                "exchange":   "BSE",
-                "company":    f.get("SLONGNAME", "Unknown"),
-                "subject":    subject,
-                "news_id":    f.get("NEWSID", ""),
-                "pdf_name":   f.get("ATTACHMENTNAME", ""),
+                "exchange": "BSE",
+                "company":  f.get("SLONGNAME", "Unknown"),
+                "subject":  f.get("NEWSSUB", "") or f.get("HEADLINE", ""),
+                "news_id":  f.get("NEWSID", ""),
+                "pdf_name": f.get("ATTACHMENTNAME", ""),
             })
     log.info(f"   BSE Reg 30 filings: {len(reg30)}")
     return reg30
@@ -155,56 +186,86 @@ def download_bse_pdf(filing):
 # ── NSE ───────────────────────────────────────────────────────
 
 NSE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.nseindia.com/",
-    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    "Accept":          "*/*",
+    "Accept-Language": "en-US,en;q=0.8",
+    "Referer":         "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+    "sec-fetch-dest":  "empty",
+    "sec-fetch-mode":  "cors",
+    "sec-fetch-site":  "same-origin",
+    "priority":        "u=1, i",
 }
 
 
 def get_nse_session():
+    """
+    NSE requires a valid session with cookies.
+    Must visit homepage + announcements page first to get cookies.
+    """
     session = requests.Session()
     try:
-        session.get("https://www.nseindia.com", headers=NSE_HEADERS, timeout=15)
+        # Step 1: Hit homepage to get initial cookies
+        session.get(
+            "https://www.nseindia.com",
+            headers=NSE_HEADERS,
+            timeout=15
+        )
         time.sleep(2)
+
+        # Step 2: Hit the exact referer page used in the curl request
         session.get(
             "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
-            headers=NSE_HEADERS, timeout=15
+            headers=NSE_HEADERS,
+            timeout=15
         )
-        time.sleep(1)
+        time.sleep(2)
+        log.info("   NSE session established ✅")
     except Exception as e:
-        log.error(f"NSE session error: {e}")
+        log.error(f"   NSE session error: {e}")
     return session
 
 
 def fetch_nse_filings(session, date):
+    """
+    Fetch NSE filings for both equities and SME indexes.
+    Uses exact API format observed from NSE website.
+    """
     date_str = date.strftime("%d-%m-%Y")
     label    = date.strftime("%Y-%m-%d")
     log.info(f"📡 Fetching NSE filings for {label}...")
-    url = (
-        "https://www.nseindia.com/api/corporate-announcements"
-        f"?index=equities&from_date={date_str}&to_date={date_str}"
-    )
-    try:
-        resp = session.get(url, headers=NSE_HEADERS, timeout=30)
-        resp.raise_for_status()
-        filings = resp.json()
-        log.info(f"   NSE total announcements: {len(filings)}")
-        return filings
-    except Exception as e:
-        log.error(f"   NSE fetch error: {e}")
-        return []
+
+    all_filings = []
+
+    for index in ["equities", "sme"]:
+        url = (
+            "https://www.nseindia.com/api/corporate-announcements"
+            f"?index={index}&from_date={date_str}&to_date={date_str}&reqXbrl=false"
+        )
+        try:
+            resp = session.get(url, headers=NSE_HEADERS, timeout=30)
+            resp.raise_for_status()
+            filings = resp.json()
+            if isinstance(filings, list):
+                log.info(f"   NSE {index} announcements: {len(filings)}")
+                all_filings.extend(filings)
+            else:
+                log.warning(f"   NSE {index} unexpected response: {filings}")
+        except Exception as e:
+            log.error(f"   NSE {index} fetch error: {e}")
+        time.sleep(1)
+
+    log.info(f"   NSE total announcements: {len(all_filings)}")
+    return all_filings
 
 
 def filter_nse_reg30(filings):
     reg30 = []
     for f in filings:
-        subject = f.get("subject", "") or f.get("desc", "") or ""
-        if is_reg30(subject):
+        if is_nse_reg30(f):
             reg30.append({
                 "exchange": "NSE",
                 "company":  f.get("comp", "Unknown"),
-                "subject":  subject,
+                "subject":  f.get("subject", "") or f.get("desc", ""),
                 "symbol":   f.get("symbol", ""),
                 "attchmnt": f.get("attchmnt", ""),
                 "an_no":    f.get("an_no", ""),
