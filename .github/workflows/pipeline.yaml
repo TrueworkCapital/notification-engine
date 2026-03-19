@@ -34,9 +34,9 @@ jobs:
           SENDER_EMAIL:    ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECEIVER_EMAIL:  ${{ secrets.RECEIVER_EMAIL }}
+          CC_EMAILS:       ${{ secrets.CC_EMAILS }}
           GH_TOKEN:        ${{ secrets.GH_TOKEN }}
           GH_REPO:         ${{ secrets.GH_REPO }}
-          CC_EMAILS:       ${{ secrets.CC_EMAILS }}
         run: python ingestion_service.py
 
       - name: Ensure pdfs directory exists
