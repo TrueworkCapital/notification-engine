@@ -275,8 +275,18 @@ Automated Notifications
 
     msg.attach(MIMEText(body, "plain"))
 
+    # try:
+    #     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+    #         server.login(SENDER_EMAIL, SENDER_PASSWORD)
+    #         server.sendmail(SENDER_EMAIL, all_rcpt, msg.as_string())
+    #     log.info(f"   ✅ Email sent to {RECEIVER_EMAIL}" + (f" + CC: {', '.join(cc_list)}" if cc_list else ""))
+    # except Exception as e:
+    #     log.error(f"   ❌ Email failed: {e}")
+    #     raise
+
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP("smtp.office365.com", 587) as server:
+            server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.sendmail(SENDER_EMAIL, all_rcpt, msg.as_string())
         log.info(f"   ✅ Email sent to {RECEIVER_EMAIL}" + (f" + CC: {', '.join(cc_list)}" if cc_list else ""))
