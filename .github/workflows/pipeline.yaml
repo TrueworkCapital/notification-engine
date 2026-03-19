@@ -4,7 +4,7 @@ on:
   schedule:
     # Runs every day at 10:00 AM IST (3:30 AM UTC)
     # - cron: "30 4 * * *"
-    - cron: "*/5 * * * *"
+    - cron: "0 3 * * *"   # 8:30 AM IST
 
   # Allow manual trigger from GitHub UI (for testing)
   workflow_dispatch:
