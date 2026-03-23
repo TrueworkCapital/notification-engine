@@ -78,7 +78,7 @@ jobs:
               "Accept": "application/vnd.github.v3+json",
           }
 
-          cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+          cutoff = datetime.now(timezone.utc) - timedelta(days=5)
           print(f"🗑️  Deleting releases older than {cutoff.strftime('%Y-%m-%d')}...")
 
           # Get all releases
