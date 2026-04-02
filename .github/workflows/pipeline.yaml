@@ -2,9 +2,8 @@ name: Event Ingestion Pipeline
 
 on:
   schedule:
-    # Runs every day at 10:00 AM IST (3:30 AM UTC)
-    # - cron: "30 4 * * *"
-    - cron: "0 3 * * *"   # 8:30 AM IST
+    # Runs every day at 8:30 AM IST (3:00 AM UTC)
+    - cron: "0 3 * * *"
 
   # Allow manual trigger from GitHub UI (for testing)
   workflow_dispatch:
@@ -53,14 +52,14 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # ── Job 2: Delete Releases older than 3 days ─────────────
+  # ── Job 2: Delete old releases keeping last 5 ────────────
   cleanup:
     runs-on: ubuntu-latest
     needs: scrape
     if: always()
 
     steps:
-      - name: Delete GitHub Releases older than 3 days
+      - name: Keep last 5 releases, delete the rest
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO:  ${{ secrets.GH_REPO }}
@@ -68,7 +67,7 @@ jobs:
           python3 - << 'EOF'
           import os
           import requests
-          from datetime import datetime, timedelta, timezone
+          from datetime import datetime, timezone
 
           GH_TOKEN = os.environ["GH_TOKEN"]
           GH_REPO  = os.environ["GH_REPO"]
@@ -78,8 +77,12 @@ jobs:
               "Accept": "application/vnd.github.v3+json",
           }
 
-          cutoff = datetime.now(timezone.utc) - timedelta(days=3)
-          print(f"🗑️  Deleting releases older than {cutoff.strftime('%Y-%m-%d')}...")
+          # How many recent releases to keep
+          # 5 covers a full week including weekends and public holidays
+          # e.g. Monday's file is safe even though Friday's is 3 days old
+          KEEP_LAST_N = 5
+
+          print(f"🗑️  Keeping last {KEEP_LAST_N} releases, deleting the rest...")
 
           # Get all releases
           resp = requests.get(
@@ -93,36 +96,57 @@ jobs:
               print(f"No releases found or API error: {releases}")
               exit(0)
 
+          if len(releases) == 0:
+              print("No releases found. Nothing to delete.")
+              exit(0)
+
+          # Sort by created_at descending (newest first)
+          releases.sort(
+              key=lambda r: datetime.fromisoformat(
+                  r["created_at"].replace("Z", "+00:00")
+              ),
+              reverse=True
+          )
+
+          print(f"📋 Found {len(releases)} total release(s)\n")
+
           deleted = 0
-          for release in releases:
-              created_at = datetime.fromisoformat(
+          for index, release in enumerate(releases):
+              release_name = release["name"]
+              release_id   = release["id"]
+              tag_name     = release["tag_name"]
+              created_at   = datetime.fromisoformat(
                   release["created_at"].replace("Z", "+00:00")
               )
-              if created_at < cutoff:
-                  release_id   = release["id"]
-                  release_name = release["name"]
-                  tag_name     = release["tag_name"]
+              age_in_days = (datetime.now(timezone.utc) - created_at).days
 
-                  # Delete the release
-                  del_resp = requests.delete(
-                      f"https://api.github.com/repos/{GH_REPO}/releases/{release_id}",
-                      headers=headers
-                  )
-                  if del_resp.status_code == 204:
-                      print(f"   ✅ Deleted release: {release_name}")
-                  else:
-                      print(f"   ❌ Failed to delete release: {release_name}")
-                      continue
+              # Keep the most recent KEEP_LAST_N releases
+              if index < KEEP_LAST_N:
+                  print(f"   ⏭️  Keeping [{index + 1}/{KEEP_LAST_N}]: {release_name} ({age_in_days} day(s) old)")
+                  continue
 
-                  # Also delete the tag
-                  tag_resp = requests.delete(
-                      f"https://api.github.com/repos/{GH_REPO}/git/refs/tags/{tag_name}",
-                      headers=headers
-                  )
-                  if tag_resp.status_code == 204:
-                      print(f"   🏷️  Deleted tag: {tag_name}")
+              # Delete the release
+              del_resp = requests.delete(
+                  f"https://api.github.com/repos/{GH_REPO}/releases/{release_id}",
+                  headers=headers
+              )
+              if del_resp.status_code == 204:
+                  print(f"   ✅ Deleted release: {release_name} ({age_in_days} days old)")
+              else:
+                  print(f"   ❌ Failed to delete: {release_name} — {del_resp.status_code}")
+                  continue
 
-                  deleted += 1
+              # Delete the tag
+              tag_resp = requests.delete(
+                  f"https://api.github.com/repos/{GH_REPO}/git/refs/tags/{tag_name}",
+                  headers=headers
+              )
+              if tag_resp.status_code == 204:
+                  print(f"   🏷️  Deleted tag: {tag_name}")
+              else:
+                  print(f"   ⚠️  Could not delete tag: {tag_name} — {tag_resp.status_code}")
+
+              deleted += 1
 
           print(f"\n✅ Cleanup done. {deleted} old release(s) deleted.")
           EOF
